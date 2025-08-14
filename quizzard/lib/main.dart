@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 void main() {
   runApp(const QuizApp());
@@ -30,6 +32,19 @@ class Question {
     required this.options,
     required this.correctAnswerIndex,
   });
+
+  // Factory method to create Question from API JSON
+  factory Question.fromApi(Map<String, dynamic> json) {
+    final correct = json['correct_answer'] as String;
+    final incorrect = List<String>.from(json['incorrect_answers']);
+    final options = [...incorrect, correct]..shuffle();
+
+    return Question(
+      text: json['question'],
+      options: options,
+      correctAnswerIndex: options.indexOf(correct),
+    );
+  }
 }
 
 class QuizScreen extends StatefulWidget {
@@ -43,29 +58,49 @@ class _QuizScreenState extends State<QuizScreen> {
   int _currentQuestionIndex = 0;
   int _score = 0;
   bool _quizCompleted = false;
+  List<Question> _questions = [];
+  bool _isLoading = true;
 
-  final List<Question> _questions = [
-    Question(
-      text: "What is the capital of France?",
-      options: ["London", "Berlin", "Paris", "Madrid"],
-      correctAnswerIndex: 2,
-    ),
-    Question(
-      text: "Which planet is known as the Red Planet?",
-      options: ["Venus", "Mars", "Jupiter", "Saturn"],
-      correctAnswerIndex: 1,
-    ),
-    Question(
-      text: "Who painted the Mona Lisa?",
-      options: [
-        "Vincent van Gogh",
-        "Pablo Picasso",
-        "Leonardo da Vinci",
-        "Michelangelo"
-      ],
-      correctAnswerIndex: 2,
-    ),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _fetchQuestions();
+  }
+
+  Future<void> _fetchQuestions() async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      // Example API: Open Trivia DB (10 multiple choice questions)
+      final url = Uri.parse("https://opentdb.com/api.php?amount=5&type=multiple");
+      final response = await http.get(url);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final results = data['results'] as List;
+
+        final fetchedQuestions = results
+            .map((json) => Question.fromApi(json))
+            .toList();
+
+        setState(() {
+          _questions = fetchedQuestions;
+          _isLoading = false;
+        });
+      } else {
+        throw Exception("Failed to load questions");
+      }
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error loading questions: $e")),
+      );
+    }
+  }
 
   void _answerQuestion(int selectedIndex) {
     if (_currentQuestionIndex < _questions.length - 1) {
@@ -77,6 +112,9 @@ class _QuizScreenState extends State<QuizScreen> {
       });
     } else {
       setState(() {
+        if (selectedIndex == _questions[_currentQuestionIndex].correctAnswerIndex) {
+          _score++;
+        }
         _quizCompleted = true;
       });
     }
@@ -88,6 +126,7 @@ class _QuizScreenState extends State<QuizScreen> {
       _score = 0;
       _quizCompleted = false;
     });
+    _fetchQuestions();
   }
 
   @override
@@ -100,71 +139,76 @@ class _QuizScreenState extends State<QuizScreen> {
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
-        child: _quizCompleted
-            ? Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      "Quiz Completed!",
-                      style: Theme.of(context).textTheme.headlineMedium,
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : _quizCompleted
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          "Quiz Completed!",
+                          style: Theme.of(context).textTheme.headlineMedium,
+                        ),
+                        const SizedBox(height: 20),
+                        Text(
+                          "Your Score: $_score/${_questions.length}",
+                          style: const TextStyle(fontSize: 24),
+                        ),
+                        const SizedBox(height: 30),
+                        ElevatedButton(
+                          onPressed: _restartQuiz,
+                          child: const Text("Restart Quiz"),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 20),
-                    Text(
-                      "Your Score: $_score/${_questions.length}",
-                      style: const TextStyle(fontSize: 24),
-                    ),
-                    const SizedBox(height: 30),
-                    ElevatedButton(
-                      onPressed: _restartQuiz,
-                      child: const Text("Restart Quiz"),
-                    ),
-                  ],
-                ),
-              )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    "Question ${_currentQuestionIndex + 1}/${_questions.length}",
-                    style: const TextStyle(fontSize: 18, color: Colors.grey),
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        "Question ${_currentQuestionIndex + 1}/${_questions.length}",
+                        style: const TextStyle(fontSize: 18, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 20),
+                      Text(
+                        _questions[_currentQuestionIndex].text,
+                        style: const TextStyle(
+                            fontSize: 24, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 30),
+                      Expanded(
+                        child: ListView.builder(
+                          itemCount: _questions[_currentQuestionIndex].options.length,
+                          itemBuilder: (context, index) {
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 8.0),
+                              child: ElevatedButton(
+                                onPressed: () => _answerQuestion(index),
+                                style: ElevatedButton.styleFrom(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 16),
+                                ),
+                                child: Text(
+                                  _questions[_currentQuestionIndex].options[index],
+                                  style: const TextStyle(fontSize: 18),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 16.0),
+                        child: Text(
+                          "Score: $_score",
+                          style: const TextStyle(
+                              fontSize: 20, fontWeight: FontWeight.bold),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 20),
-                  Text(
-                    _questions[_currentQuestionIndex].text,
-                    style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 30),
-                  Expanded(
-                    child: ListView.builder(
-                      itemCount: _questions[_currentQuestionIndex].options.length,
-                      itemBuilder: (context, index) {
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 8.0),
-                          child: ElevatedButton(
-                            onPressed: () => _answerQuestion(index),
-                            style: ElevatedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                            ),
-                            child: Text(
-                              _questions[_currentQuestionIndex].options[index],
-                              style: const TextStyle(fontSize: 18),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 16.0),
-                    child: Text(
-                      "Score: $_score",
-                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                ],
-              ),
       ),
     );
   }
